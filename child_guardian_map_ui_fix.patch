@@ -1,0 +1,243 @@
+diff --git a/lib/screens/child_dashboard_screen.dart b/lib/screens/child_dashboard_screen.dart
+index b900dec..cf7db1c 100644
+--- a/lib/screens/child_dashboard_screen.dart
++++ b/lib/screens/child_dashboard_screen.dart
+@@ -100,75 +100,98 @@ class _ChildDashboardScreenState extends State<ChildDashboardScreen> {
+           children: [
+             _buildHeader(),
+             Expanded(
+-              child: Padding(
+-                padding: const EdgeInsets.symmetric(horizontal: 24),
+-                child: Column(
+-                  children: [
+-                    const SizedBox(height: 10),
+-
+-                    // ---- Status card ----
+-                    CustomCard(
+-                      child: Row(
+-                        children: [
+-                          const Icon(Icons.gps_fixed_rounded, color: AppColors.primary),
+-                          const SizedBox(width: 12),
+-                          Expanded(
+-                            child: Text(
+-                              _statusMessage ?? 'Starting location services...',
+-                              style: AppTextStyles.body,
+-                            ),
+-                          ),
+-                        ],
+-                      ),
+-                    ),
++              child: LayoutBuilder(
++                builder: (context, constraints) {
++                  // Scale the SOS button off the shortest screen side so it
++                  // stays proportional on small phones, Pixel 8, and
++                  // tablets alike, instead of a fixed 190px that can crowd
++                  // out the rest of the layout on smaller devices.
++                  final double shortestSide = MediaQuery.of(context).size.shortestSide;
++                  final double sosSize = (shortestSide / 2.1).clamp(150.0, 220.0);
+ 
+-                    const Spacer(),
+-
+-                    // ---- Big SOS button ----
+-                    Text('In an emergency, tap the button below',
+-                        style: AppTextStyles.subheading, textAlign: TextAlign.center),
+-                    const SizedBox(height: 20),
+-                    GestureDetector(
+-                      onTap: _isSendingSos ? null : _sendSos,
+-                      child: Container(
+-                        width: 190,
+-                        height: 190,
+-                        decoration: BoxDecoration(
+-                          shape: BoxShape.circle,
+-                          color: AppColors.danger,
+-                          boxShadow: [
+-                            BoxShadow(
+-                              color: AppColors.danger.withOpacity(0.5),
+-                              blurRadius: 30,
+-                              spreadRadius: 6,
++                  // ConstrainedBox + IntrinsicHeight lets this content fill
++                  // the available space and stay centered (via the Spacers)
++                  // when there's room, but become scrollable instead of
++                  // overflowing when there isn't - e.g. on shorter screens,
++                  // small emulator windows, or when the status message
++                  // above wraps to two lines.
++                  return SingleChildScrollView(
++                    padding: const EdgeInsets.symmetric(horizontal: 24),
++                    physics: const ClampingScrollPhysics(),
++                    child: ConstrainedBox(
++                      constraints: BoxConstraints(minHeight: constraints.maxHeight),
++                      child: IntrinsicHeight(
++                        child: Column(
++                          children: [
++                            const SizedBox(height: 10),
++
++                            // ---- Status card ----
++                            CustomCard(
++                              child: Row(
++                                children: [
++                                  const Icon(Icons.gps_fixed_rounded, color: AppColors.primary),
++                                  const SizedBox(width: 12),
++                                  Expanded(
++                                    child: Text(
++                                      _statusMessage ?? 'Starting location services...',
++                                      style: AppTextStyles.body,
++                                    ),
++                                  ),
++                                ],
++                              ),
+                             ),
+-                          ],
+-                        ),
+-                        child: Center(
+-                          child: _isSendingSos
+-                              ? const CircularProgressIndicator(color: Colors.white)
+-                              : Column(
+-                                  mainAxisSize: MainAxisSize.min,
+-                                  children: const [
+-                                    Icon(Icons.sos_rounded, color: Colors.white, size: 48),
+-                                    SizedBox(height: 8),
+-                                    Text(
+-                                      'SOS',
+-                                      style: TextStyle(
+-                                        color: Colors.white,
+-                                        fontSize: 26,
+-                                        fontWeight: FontWeight.bold,
+-                                        letterSpacing: 2,
+-                                      ),
++
++                            const Spacer(),
++
++                            // ---- Big SOS button ----
++                            Text('In an emergency, tap the button below',
++                                style: AppTextStyles.subheading, textAlign: TextAlign.center),
++                            const SizedBox(height: 20),
++                            GestureDetector(
++                              onTap: _isSendingSos ? null : _sendSos,
++                              child: Container(
++                                width: sosSize,
++                                height: sosSize,
++                                decoration: BoxDecoration(
++                                  shape: BoxShape.circle,
++                                  color: AppColors.danger,
++                                  boxShadow: [
++                                    BoxShadow(
++                                      color: AppColors.danger.withOpacity(0.5),
++                                      blurRadius: 30,
++                                      spreadRadius: 6,
+                                     ),
+                                   ],
+                                 ),
++                                child: Center(
++                                  child: _isSendingSos
++                                      ? const CircularProgressIndicator(color: Colors.white)
++                                      : Column(
++                                          mainAxisSize: MainAxisSize.min,
++                                          children: const [
++                                            Icon(Icons.sos_rounded, color: Colors.white, size: 48),
++                                            SizedBox(height: 8),
++                                            Text(
++                                              'SOS',
++                                              style: TextStyle(
++                                                color: Colors.white,
++                                                fontSize: 26,
++                                                fontWeight: FontWeight.bold,
++                                                letterSpacing: 2,
++                                              ),
++                                            ),
++                                          ],
++                                        ),
++                                ),
++                              ),
++                            ),
++                            const Spacer(),
++                          ],
+                         ),
+                       ),
+                     ),
+-                    const Spacer(),
+-                  ],
+-                ),
++                  );
++                },
+               ),
+             ),
+           ],
+diff --git a/lib/screens/parent_dashboard_screen.dart b/lib/screens/parent_dashboard_screen.dart
+index af3749a..b66939e 100644
+--- a/lib/screens/parent_dashboard_screen.dart
++++ b/lib/screens/parent_dashboard_screen.dart
+@@ -40,17 +40,28 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
+ 
+   @override
+   Widget build(BuildContext context) {
+-    final childUid = widget.user.linkedUid;
+-
+     return Scaffold(
+       body: SafeArea(
+         child: Column(
+           children: [
+             _buildHeader(),
+             Expanded(
+-              child: childUid == null
+-                  ? _buildWaitingForChild()
+-                  : _buildLinkedDashboard(childUid),
++              // Listen to the parent's OWN profile in real time instead of
++              // the one-time snapshot captured at login. This way, if the
++              // child links to this parent AFTER the parent already opened
++              // the dashboard, "linkedUid" updates live and the map below
++              // connects automatically without requiring a re-login.
++              child: StreamBuilder<AppUser?>(
++                stream: _firestoreService.streamUserProfile(widget.user.uid),
++                builder: (context, profileSnapshot) {
++                  final parentProfile = profileSnapshot.data ?? widget.user;
++                  final childUid = parentProfile.linkedUid;
++
++                  return childUid == null
++                      ? _buildWaitingForChild()
++                      : _buildLinkedDashboard(childUid);
++                },
++              ),
+             ),
+           ],
+         ),
+@@ -133,6 +144,18 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
+       builder: (context, locationSnapshot) {
+         final location = locationSnapshot.data;
+ 
++        // Keep the map camera centered on the child as new GPS points
++        // arrive from Firestore, instead of only centering once on the
++        // very first location. Scheduled after the frame so the map
++        // controller is never touched in the middle of a build.
++        if (location != null && _mapController != null) {
++          WidgetsBinding.instance.addPostFrameCallback((_) {
++            _mapController?.animateCamera(
++              CameraUpdate.newLatLng(LatLng(location.latitude, location.longitude)),
++            );
++          });
++        }
++
+         return Column(
+           children: [
+             // ---------------- MAP ----------------
+diff --git a/lib/services/firestore_service.dart b/lib/services/firestore_service.dart
+index 17ace39..bda893d 100644
+--- a/lib/services/firestore_service.dart
++++ b/lib/services/firestore_service.dart
+@@ -36,6 +36,17 @@ class FirestoreService {
+     return AppUser.fromMap(doc.data()!);
+   }
+ 
++  // Real-time version of getUserProfile(). The Parent Dashboard uses
++  // this so that "linkedUid" updates live the moment a child links to
++  // this parent, instead of relying on the profile snapshot captured
++  // once at login (which would otherwise stay null until re-login).
++  Stream<AppUser?> streamUserProfile(String uid) {
++    return _db.collection('users').doc(uid).snapshots().map((doc) {
++      if (!doc.exists) return null;
++      return AppUser.fromMap(doc.data()!);
++    });
++  }
++
+   // --------------------------------------------------------
+   // PARENT-CHILD LINKING (simple version for Day 1)
+   // A parent generates a 6-digit "linkCode". The child enters

@@ -1,0 +1,109 @@
+// ============================================================
+// firestore_service.dart
+// ------------------------------------------------------------
+// Wraps all Cloud Firestore reads/writes in one class.
+// Firestore structure used in this project (Day 1):
+//
+//   users/{uid}              -> AppUser profile (role, links)
+//   locations/{childUid}     -> latest GPS point for a child
+//     (we overwrite the same doc every 10s to keep it simple;
+//      a "history" subcollection can be added in Sprint 2)
+//   sos_alerts/{autoId}      -> one document per emergency alert
+//
+// This class is intentionally simple/beginner-friendly for
+// Sprint 1. It can be refactored into repositories later.
+// ============================================================
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../models/user_model.dart';
+import '../models/location_model.dart';
+import '../models/sos_model.dart';
+
+class FirestoreService {
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
+
+  // ---------------- USERS ----------------
+
+  // Save a new user profile after signup (role = parent/child).
+  Future<void> createUserProfile(AppUser user) async {
+    await _db.collection('users').doc(user.uid).set(user.toMap());
+  }
+
+  // Fetch a user's profile (used to check their role after login).
+  Future<AppUser?> getUserProfile(String uid) async {
+    final doc = await _db.collection('users').doc(uid).get();
+    if (!doc.exists) return null;
+    return AppUser.fromMap(doc.data()!);
+  }
+
+  // --------------------------------------------------------
+  // PARENT-CHILD LINKING (simple version for Day 1)
+  // A parent generates a 6-digit "linkCode". The child enters
+  // that code, and we store each other's uid as "linkedUid".
+  // --------------------------------------------------------
+  Future<void> linkChildToParent({
+    required String childUid,
+    required String linkCode,
+  }) async {
+    // Find the parent who owns this code.
+    final query = await _db
+        .collection('users')
+        .where('linkCode', isEqualTo: linkCode)
+        .where('role', isEqualTo: 'parent')
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) {
+      throw Exception('Invalid link code. Please check with your parent.');
+    }
+
+    final parentDoc = query.docs.first;
+    final parentUid = parentDoc.id;
+
+    // Update the child's record with the parent's uid.
+    await _db.collection('users').doc(childUid).update({'linkedUid': parentUid});
+    // Update the parent's record with the child's uid.
+    await _db.collection('users').doc(parentUid).update({'linkedUid': childUid});
+  }
+
+  // ---------------- LOCATIONS ----------------
+
+  // Called every 10 seconds by LocationService to update the
+  // child's live position. We use set() with the childUid as
+  // the document ID so each child only ever has ONE current doc.
+  Future<void> updateLocation(LocationModel location) async {
+    await _db
+        .collection('locations')
+        .doc(location.childUid)
+        .set(location.toMap());
+  }
+
+  // Real-time stream the Parent Dashboard listens to, so the
+  // map marker moves automatically whenever the child's
+  // location document changes.
+  Stream<LocationModel?> streamChildLocation(String childUid) {
+    return _db.collection('locations').doc(childUid).snapshots().map((doc) {
+      if (!doc.exists) return null;
+      return LocationModel.fromMap(doc.data()!);
+    });
+  }
+
+  // ---------------- SOS ALERTS ----------------
+
+  // Called when the child taps the big SOS button.
+  Future<void> createSosAlert(SosAlert alert) async {
+    await _db.collection('sos_alerts').add(alert.toMap());
+  }
+
+  // Parent listens to this stream to get notified instantly
+  // whenever a new "active" SOS alert is created for their child.
+  Stream<List<SosAlert>> streamActiveAlerts(String childUid) {
+    return _db
+        .collection('sos_alerts')
+        .where('childUid', isEqualTo: childUid)
+        .where('status', isEqualTo: 'active')
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs.map((d) => SosAlert.fromMap(d.data())).toList());
+  }
+}
