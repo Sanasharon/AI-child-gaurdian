@@ -54,14 +54,26 @@ class StatTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return CustomCard(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: iconColor, size: 26),
-          const SizedBox(height: 10),
-          Text(value, style: AppTextStyles.heading.copyWith(fontSize: 18)),
+          Icon(icon, color: iconColor, size: 24),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: AppTextStyles.heading.copyWith(fontSize: 17),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
           const SizedBox(height: 2),
-          Text(label, style: AppTextStyles.subheading.copyWith(fontSize: 12)),
+          Text(
+            label,
+            style: AppTextStyles.subheading.copyWith(fontSize: 11),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ],
       ),
     );

@@ -16,7 +16,6 @@ import '../models/user_model.dart';
 import '../services/firestore_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_button.dart';
-import '../widgets/custom_card.dart';
 import 'parent_dashboard_screen.dart';
 import 'child_dashboard_screen.dart';
 
@@ -105,88 +104,103 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 28),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 32),
-                Text('Who are you?', style: AppTextStyles.heading),
-                const SizedBox(height: 6),
-                Text('Select your role to personalize the app',
-                    style: AppTextStyles.subheading),
-                const SizedBox(height: 28),
+        child: GestureDetector(
+          onTap: () => FocusScope.of(context).unfocus(),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight - 32 > 0 ? constraints.maxHeight - 32 : 0,
+                  ),
+                  child: IntrinsicHeight(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 16),
+                        Text('Who are you?', style: AppTextStyles.heading),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Select your role to personalize the app',
+                          style: AppTextStyles.subheading,
+                        ),
+                        const SizedBox(height: 24),
 
-                // ---- Role cards ----
-                Row(
-                  children: [
-                    Expanded(
-                      child: _RoleCard(
-                        icon: Icons.family_restroom_rounded,
-                        label: 'Parent',
-                        selected: _selectedRole == 'parent',
-                        onTap: () => setState(() => _selectedRole = 'parent'),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: _RoleCard(
-                        icon: Icons.emoji_people_rounded,
-                        label: 'Child',
-                        selected: _selectedRole == 'child',
-                        onTap: () => setState(() => _selectedRole = 'child'),
-                      ),
-                    ),
-                  ],
-                ),
+                        // ---- Role cards ----
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _RoleCard(
+                                icon: Icons.family_restroom_rounded,
+                                label: 'Parent',
+                                selected: _selectedRole == 'parent',
+                                onTap: () => setState(() => _selectedRole = 'parent'),
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: _RoleCard(
+                                icon: Icons.emoji_people_rounded,
+                                label: 'Child',
+                                selected: _selectedRole == 'child',
+                                onTap: () => setState(() => _selectedRole = 'child'),
+                              ),
+                            ),
+                          ],
+                        ),
 
-                const SizedBox(height: 28),
+                        const SizedBox(height: 24),
 
-                // ---- Name field ----
-                Container(
-                  decoration: AppDecorations.neumorphicInset(radius: 18),
-                  child: TextField(
-                    controller: _nameController,
-                    style: AppTextStyles.body,
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.person_outline, color: AppColors.textLight),
-                      hintText: 'Your full name',
-                      border: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(vertical: 16, horizontal: 14),
+                        // ---- Name field ----
+                        Container(
+                          decoration: AppDecorations.neumorphicInset(radius: 18),
+                          child: TextField(
+                            controller: _nameController,
+                            style: AppTextStyles.body,
+                            decoration: const InputDecoration(
+                              prefixIcon: Icon(Icons.person_outline, color: AppColors.textLight),
+                              hintText: 'Your full name',
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.symmetric(vertical: 16, horizontal: 14),
+                            ),
+                          ),
+                        ),
+
+                        // ---- Link code field (Child only) ----
+                        if (_selectedRole == 'child') ...[
+                          const SizedBox(height: 14),
+                          Container(
+                            decoration: AppDecorations.neumorphicInset(radius: 18),
+                            child: TextField(
+                              controller: _linkCodeController,
+                              keyboardType: TextInputType.number,
+                              style: AppTextStyles.body,
+                              decoration: const InputDecoration(
+                                prefixIcon: Icon(Icons.link_rounded, color: AppColors.textLight),
+                                hintText: "Enter parent's link code",
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(vertical: 16, horizontal: 14),
+                              ),
+                            ),
+                          ),
+                        ],
+
+                        if (_errorText != null) ...[
+                          const SizedBox(height: 12),
+                          Text(_errorText!, style: const TextStyle(color: AppColors.danger, fontSize: 13)),
+                        ],
+
+                        const Spacer(),
+                        const SizedBox(height: 24),
+                        CustomButton(label: 'Continue', isLoading: _isLoading, onPressed: _continue),
+                        const SizedBox(height: 8),
+                      ],
                     ),
                   ),
                 ),
-
-                // ---- Link code field (Child only) ----
-                if (_selectedRole == 'child') ...[
-                  const SizedBox(height: 16),
-                  Container(
-                    decoration: AppDecorations.neumorphicInset(radius: 18),
-                    child: TextField(
-                      controller: _linkCodeController,
-                      keyboardType: TextInputType.number,
-                      style: AppTextStyles.body,
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.link_rounded, color: AppColors.textLight),
-                        hintText: 'Enter parent\'s link code',
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(vertical: 16, horizontal: 14),
-                      ),
-                    ),
-                  ),
-                ],
-
-                if (_errorText != null) ...[
-                  const SizedBox(height: 14),
-                  Text(_errorText!, style: const TextStyle(color: AppColors.danger, fontSize: 13)),
-                ],
-
-                const SizedBox(height: 28),
-                CustomButton(label: 'Continue', isLoading: _isLoading, onPressed: _continue),
-                const SizedBox(height: 20),
-              ],
-            ),
+              );
+            },
           ),
         ),
       ),
@@ -213,18 +227,21 @@ class _RoleCard extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 26),
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 8),
         decoration: selected
             ? AppDecorations.neumorphicInset(radius: 20).copyWith(
                 color: AppColors.primary.withOpacity(0.15),
               )
             : AppDecorations.neumorphicCard(radius: 20),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 34, color: selected ? AppColors.primaryDark : AppColors.textLight),
-            const SizedBox(height: 10),
+            Icon(icon, size: 32, color: selected ? AppColors.primaryDark : AppColors.textLight),
+            const SizedBox(height: 8),
             Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 color: selected ? AppColors.primaryDark : AppColors.textDark,

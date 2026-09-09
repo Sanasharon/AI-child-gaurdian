@@ -36,6 +36,17 @@ class FirestoreService {
     return AppUser.fromMap(doc.data()!);
   }
 
+  // Real-time version of getUserProfile(). The Parent Dashboard uses
+  // this so that "linkedUid" updates live the moment a child links to
+  // this parent, instead of relying on the profile snapshot captured
+  // once at login (which would otherwise stay null until re-login).
+  Stream<AppUser?> streamUserProfile(String uid) {
+    return _db.collection('users').doc(uid).snapshots().map((doc) {
+      if (!doc.exists) return null;
+      return AppUser.fromMap(doc.data()!);
+    });
+  }
+
   // --------------------------------------------------------
   // PARENT-CHILD LINKING (simple version for Day 1)
   // A parent generates a 6-digit "linkCode". The child enters
@@ -105,5 +116,59 @@ class FirestoreService {
         .orderBy('timestamp', descending: true)
         .snapshots()
         .map((snap) => snap.docs.map((d) => SosAlert.fromMap(d.data())).toList());
+  }
+
+  // Stream past emergency / SOS alerts for the History screen.
+  Stream<List<SosAlert>> streamAlertHistory(String childUid) {
+    return _db
+        .collection('sos_alerts')
+        .where('childUid', isEqualTo: childUid)
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs.map((d) => SosAlert.fromMap(d.data())).toList());
+  }
+
+  // ---------------- SAFETY REQUESTS ("I'M SAFE") ----------------
+
+  // Called when child taps "🟢 I'm Safe" button.
+  Future<void> createSafetyRequest({
+    required String childUid,
+    required String childName,
+  }) async {
+    await _db.collection('safety_requests').doc(childUid).set({
+      'childUid': childUid,
+      'childName': childName,
+      'status': 'pending', // "pending", "approved", "rejected", or "cancelled"
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
+  // Listen to safety request state for a child in real time.
+  Stream<Map<String, dynamic>?> streamSafetyRequest(String childUid) {
+    return _db.collection('safety_requests').doc(childUid).snapshots().map((doc) {
+      if (!doc.exists) return null;
+      return doc.data();
+    });
+  }
+
+  // Parent approves child's "I'm Safe" request -> pauses location.
+  Future<void> approveSafetyRequest(String childUid) async {
+    await _db.collection('safety_requests').doc(childUid).update({
+      'status': 'approved',
+      'resolvedAt': DateTime.now().toIso8601String(),
+    });
+  }
+
+  // Parent rejects child's request ("Keep Tracking") -> keeps location active.
+  Future<void> rejectSafetyRequest(String childUid) async {
+    await _db.collection('safety_requests').doc(childUid).update({
+      'status': 'rejected',
+      'resolvedAt': DateTime.now().toIso8601String(),
+    });
+  }
+
+  // Reset or cancel safety request (e.g. when SOS is triggered).
+  Future<void> resetSafetyRequest(String childUid) async {
+    await _db.collection('safety_requests').doc(childUid).delete();
   }
 }
