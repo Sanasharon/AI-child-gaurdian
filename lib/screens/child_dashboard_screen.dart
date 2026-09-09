@@ -18,6 +18,7 @@ import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_card.dart';
 import '../widgets/bottom_nav_bar.dart';
+import 'child_map_screen.dart';
 import 'login_screen.dart';
 
 class ChildDashboardScreen extends StatefulWidget {
@@ -183,11 +184,13 @@ class _ChildDashboardScreenState extends State<ChildDashboardScreen> {
           children: [
             _buildHeader(),
             Expanded(
-              child: _navIndex == 2
-                  ? _buildProfileScreen()
-                  : StreamBuilder<Map<String, dynamic>?>(
-                      stream: _firestoreService.streamSafetyRequest(widget.user.uid),
-                      builder: (context, safetySnap) {
+              child: _navIndex == 1
+                  ? ChildMapScreen(user: widget.user)
+                  : _navIndex == 2
+                      ? _buildProfileScreen()
+                      : StreamBuilder<Map<String, dynamic>?>(
+                          stream: _firestoreService.streamSafetyRequest(widget.user.uid),
+                          builder: (context, safetySnap) {
                         final safetyData = safetySnap.data;
                         final safetyStatus = safetyData?['status'] as String?;
                         final isPending = safetyStatus == 'pending';
@@ -220,27 +223,36 @@ class _ChildDashboardScreenState extends State<ChildDashboardScreen> {
                                       const SizedBox(height: 6),
 
                                       // ---- Status card ----
-                                      CustomCard(
-                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                        child: Row(
-                                          children: [
-                                            Icon(
-                                              isApproved
-                                                  ? Icons.pause_circle_filled_rounded
-                                                  : isPending
-                                                      ? Icons.hourglass_top_rounded
-                                                      : Icons.gps_fixed_rounded,
-                                              color: isApproved ? AppColors.success : AppColors.primary,
-                                              size: 22,
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                              child: Text(
-                                                displayStatus,
-                                                style: AppTextStyles.body,
+                                      GestureDetector(
+                                        onTap: () => setState(() => _navIndex = 1),
+                                        child: CustomCard(
+                                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                isApproved
+                                                    ? Icons.pause_circle_filled_rounded
+                                                    : isPending
+                                                        ? Icons.hourglass_top_rounded
+                                                        : Icons.gps_fixed_rounded,
+                                                color: isApproved ? AppColors.success : AppColors.primary,
+                                                size: 22,
                                               ),
-                                            ),
-                                          ],
+                                              const SizedBox(width: 12),
+                                              Expanded(
+                                                child: Text(
+                                                  displayStatus,
+                                                  style: AppTextStyles.body,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 6),
+                                              const Icon(
+                                                Icons.map_outlined,
+                                                size: 18,
+                                                color: AppColors.primaryDark,
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
 
@@ -362,7 +374,7 @@ class _ChildDashboardScreenState extends State<ChildDashboardScreen> {
         onTap: (i) => setState(() => _navIndex = i),
         items: const [
           NavItem(icon: Icons.home_rounded, label: 'Home'),
-          NavItem(icon: Icons.shield_rounded, label: 'Safety'),
+          NavItem(icon: Icons.map_rounded, label: 'Map'),
           NavItem(icon: Icons.person_rounded, label: 'Profile'),
         ],
       ),
@@ -398,7 +410,9 @@ class _ChildDashboardScreenState extends State<ChildDashboardScreen> {
 
   Widget _buildHeader() {
     String subtitle = 'Child Mode';
-    if (_navIndex == 2) {
+    if (_navIndex == 1) {
+      subtitle = 'Live Location & Safe Zones';
+    } else if (_navIndex == 2) {
       subtitle = 'Child Profile';
     }
 

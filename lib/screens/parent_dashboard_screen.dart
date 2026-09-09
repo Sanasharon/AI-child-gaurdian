@@ -28,6 +28,7 @@ import '../services/geofence_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_card.dart';
 import '../widgets/bottom_nav_bar.dart';
+import '../widgets/marker_helper.dart';
 import 'login_screen.dart';
 import 'safe_places_screen.dart';
 
@@ -49,7 +50,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
   // Track previous and current locations for the trail visualization
   LocationModel? _previousLocation;
   LocationModel? _currentLocation;
-  BitmapDescriptor? _whiteMarkerIcon;
+  BitmapDescriptor? _childPinMarkerIcon;
   BitmapDescriptor? _darkBlueMarkerIcon;
   BitmapDescriptor? _arrowIcon;
 
@@ -65,6 +66,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
   void _processGeofenceForLocation(String childUid, LocationModel location) {
     if (_activeSafePlaces.isEmpty) return;
 
+    // Evaluate active geofences on every location change
     for (final place in _activeSafePlaces) {
       final event = _geofenceService.evaluateLocation(
         monitoredUid: childUid,
@@ -82,12 +84,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
   }
 
   Future<void> _initCustomMarkers() async {
-    _whiteMarkerIcon = await _createCircleMarker(
-      color: Colors.white,
-      borderColor: AppColors.primaryDark,
-      radius: 20,
-      borderWidth: 5,
-    );
+    _childPinMarkerIcon = await MarkerHelper.createMinimalWhitePinMarker();
     _darkBlueMarkerIcon = await _createCircleMarker(
       color: const Color(0xFF1E3A8A), // Dark blue
       borderColor: const Color(0xFF93C5FD), // Subtle lighter blue border
@@ -97,6 +94,8 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
     _arrowIcon = await _createArrowMarker();
     if (mounted) setState(() {});
   }
+
+
 
   Future<BitmapDescriptor> _createCircleMarker({
     required Color color,
@@ -239,7 +238,6 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
                 builder: (context, profileSnapshot) {
                   final parentProfile = profileSnapshot.data ?? widget.user;
                   final childUid = parentProfile.linkedUid;
-
                   if (childUid == null) {
                     return _buildWaitingForChild();
                   }
@@ -259,7 +257,12 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
       ),
       bottomNavigationBar: AppBottomNavBar(
         currentIndex: _navIndex,
-        onTap: (i) => setState(() => _navIndex = i),
+        onTap: (i) {
+          if (_navIndex != i) {
+            _mapController = null;
+            setState(() => _navIndex = i);
+          }
+        },
         items: const [
           NavItem(icon: Icons.home_rounded, label: 'Home'),
           NavItem(icon: Icons.history_rounded, label: 'History'),
@@ -375,9 +378,12 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
             // controller is never touched in the middle of a build.
             if (location != null && _mapController != null) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
-                _mapController?.animateCamera(
-                  CameraUpdate.newLatLng(LatLng(location.latitude, location.longitude)),
-                );
+                if (!mounted || _mapController == null) return;
+                try {
+                  _mapController?.animateCamera(
+                    CameraUpdate.newLatLng(LatLng(location.latitude, location.longitude)),
+                  );
+                } catch (_) {}
               });
             }
 
@@ -397,29 +403,16 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
                   fillColor: AppColors.primary.withValues(alpha: 0.18),
                 ),
               );
-
-              // Add a subtle center marker for the Safe Place
-              markers.add(
-                Marker(
-                  markerId: MarkerId('safe_place_${sp.id}'),
-                  position: LatLng(sp.latitude, sp.longitude),
-                  icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
-                  infoWindow: InfoWindow(
-                    title: sp.name,
-                    snippet: '${sp.radius.round()}m radius safe zone',
-                  ),
-                ),
-              );
             }
 
             if (location != null) {
-              // Current child location marker (white style)
+              // Current child location marker (minimal white pin with subtle soft glow)
               markers.add(
                 Marker(
                   markerId: const MarkerId('child_current'),
                   position: LatLng(location.latitude, location.longitude),
-                  icon: _whiteMarkerIcon ?? BitmapDescriptor.defaultMarker,
-                  anchor: const Offset(0.5, 0.5),
+                  icon: _childPinMarkerIcon ?? BitmapDescriptor.defaultMarker,
+                  anchor: MarkerHelper.pinAnchor, // Pin tip anchored precisely to coordinates
                   infoWindow: const InfoWindow(title: "Child's current location"),
                 ),
               );
@@ -663,17 +656,35 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
                               IconData activityIcon = Icons.check_circle_outline_rounded;
                               Color activityColor = AppColors.success;
 
-                              // Determine whether latest SOS or latest Geofence event is newer
-                              final bool hasAlert = latestAlert != null;
-                              final bool hasGeofence = latestGeofence != null;
+                              // Candidate timestamps from real Firestore streams
+                              final DateTime? alertTime = latestAlert?.timestamp;
+                              final DateTime? geofenceTime = latestGeofence?.timestamp;
+                              final DateTime? locTime = location?.timestamp;
 
-                              if (hasAlert && (!hasGeofence || latestAlert.timestamp.isAfter(latestGeofence.timestamp))) {
+                              // Determine which event is truly the most recent
+                              DateTime? newestTime;
+                              String newestType = 'none';
+
+                              if (alertTime != null) {
+                                newestTime = alertTime;
+                                newestType = 'alert';
+                              }
+                              if (geofenceTime != null && (newestTime == null || geofenceTime.isAfter(newestTime))) {
+                                newestTime = geofenceTime;
+                                newestType = 'geofence';
+                              }
+                              if (locTime != null && (newestTime == null || locTime.isAfter(newestTime))) {
+                                newestTime = locTime;
+                                newestType = 'location';
+                              }
+
+                              if (newestType == 'alert' && latestAlert != null) {
                                 final isRecentActive = latestAlert.status == 'active';
                                 activityTitle = isRecentActive ? 'SOS Alert Triggered' : 'Past SOS Resolved';
                                 activitySubtitle = '${_formatDate(latestAlert.timestamp)} at ${_formatTime(latestAlert.timestamp)} • Lat: ${latestAlert.latitude.toStringAsFixed(4)}, Lng: ${latestAlert.longitude.toStringAsFixed(4)}';
                                 activityIcon = isRecentActive ? Icons.warning_rounded : Icons.history_rounded;
                                 activityColor = isRecentActive ? AppColors.danger : AppColors.primary;
-                              } else if (hasGeofence) {
+                              } else if (newestType == 'geofence' && latestGeofence != null) {
                                 final isEnter = latestGeofence.eventType == 'ENTER';
                                 final isUnexpected = latestGeofence.eventType == 'UNEXPECTED_EXIT';
 
