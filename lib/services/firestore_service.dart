@@ -18,6 +18,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
 import '../models/location_model.dart';
 import '../models/sos_model.dart';
+import '../models/safe_place_model.dart';
+import '../models/geofence_event_model.dart';
 
 class FirestoreService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -170,5 +172,63 @@ class FirestoreService {
   // Reset or cancel safety request (e.g. when SOS is triggered).
   Future<void> resetSafetyRequest(String childUid) async {
     await _db.collection('safety_requests').doc(childUid).delete();
+  }
+
+  // ---------------- SAFE PLACES ----------------
+
+  // Create or update a SafePlace document in Firestore.
+  Future<void> saveSafePlace(SafePlace place) async {
+    await _db.collection('safe_places').doc(place.id).set(place.toMap());
+  }
+
+  // Delete a SafePlace document.
+  Future<void> deleteSafePlace(String placeId) async {
+    await _db.collection('safe_places').doc(placeId).delete();
+  }
+
+  // Stream all SafePlaces created by a specific guardian.
+  Stream<List<SafePlace>> streamGuardianSafePlaces(String guardianUid) {
+    return _db
+        .collection('safe_places')
+        .where('guardianUid', isEqualTo: guardianUid)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((d) => SafePlace.fromMap(d.data(), docId: d.id))
+            .toList());
+  }
+
+  // Stream active SafePlaces that apply to a monitored entity or all entities under this guardian.
+  Stream<List<SafePlace>> streamActiveSafePlaces({
+    required String guardianUid,
+    String? monitoredUid,
+  }) {
+    return _db
+        .collection('safe_places')
+        .where('guardianUid', isEqualTo: guardianUid)
+        .where('isActive', isEqualTo: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((d) => SafePlace.fromMap(d.data(), docId: d.id))
+            .where((p) => p.monitoredUid == null || p.monitoredUid == monitoredUid)
+            .toList());
+  }
+
+  // ---------------- GEOFENCE EVENTS ----------------
+
+  // Store a confirmed geofence event (ENTER / EXIT / UNEXPECTED_EXIT).
+  Future<void> recordGeofenceEvent(GeofenceEvent event) async {
+    await _db.collection('geofence_events').doc(event.id).set(event.toMap());
+  }
+
+  // Stream geofence events for a monitored entity, newest first.
+  Stream<List<GeofenceEvent>> streamGeofenceEvents(String monitoredUid) {
+    return _db
+        .collection('geofence_events')
+        .where('monitoredUid', isEqualTo: monitoredUid)
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((d) => GeofenceEvent.fromMap(d.data(), docId: d.id))
+            .toList());
   }
 }

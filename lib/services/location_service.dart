@@ -72,6 +72,7 @@ class LocationService {
           latitude: position.latitude,
           longitude: position.longitude,
           timestamp: DateTime.now(),
+          accuracy: position.accuracy,
         );
         await _firestoreService.updateLocation(location);
       } catch (e) {

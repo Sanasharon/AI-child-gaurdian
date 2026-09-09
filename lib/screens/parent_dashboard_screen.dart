@@ -20,12 +20,16 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../models/user_model.dart';
 import '../models/location_model.dart';
 import '../models/sos_model.dart';
+import '../models/safe_place_model.dart';
+import '../models/geofence_event_model.dart';
 import '../services/firestore_service.dart';
 import '../services/auth_service.dart';
+import '../services/geofence_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_card.dart';
 import '../widgets/bottom_nav_bar.dart';
 import 'login_screen.dart';
+import 'safe_places_screen.dart';
 
 class ParentDashboardScreen extends StatefulWidget {
   final AppUser user;
@@ -38,6 +42,7 @@ class ParentDashboardScreen extends StatefulWidget {
 class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
   final _firestoreService = FirestoreService();
   final _authService = AuthService();
+  final _geofenceService = GeofenceService();
   int _navIndex = 0;
   GoogleMapController? _mapController;
 
@@ -48,10 +53,32 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
   BitmapDescriptor? _darkBlueMarkerIcon;
   BitmapDescriptor? _arrowIcon;
 
+  // Cached active safe places
+  List<SafePlace> _activeSafePlaces = [];
+
   @override
   void initState() {
     super.initState();
     _initCustomMarkers();
+  }
+
+  void _processGeofenceForLocation(String childUid, LocationModel location) {
+    if (_activeSafePlaces.isEmpty) return;
+
+    for (final place in _activeSafePlaces) {
+      final event = _geofenceService.evaluateLocation(
+        monitoredUid: childUid,
+        place: place,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        accuracy: location.accuracy,
+        timestamp: location.timestamp,
+      );
+
+      if (event != null) {
+        _firestoreService.recordGeofenceEvent(event);
+      }
+    }
   }
 
   Future<void> _initCustomMarkers() async {
@@ -323,115 +350,154 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
 
   // Main dashboard once a child is linked: map + stats + Recent Activities.
   Widget _buildLinkedDashboard(String childUid) {
-    return StreamBuilder<LocationModel?>(
-      stream: _firestoreService.streamChildLocation(childUid),
-      builder: (context, locationSnapshot) {
-        final location = locationSnapshot.data;
+    return StreamBuilder<List<SafePlace>>(
+      stream: _firestoreService.streamActiveSafePlaces(
+        guardianUid: widget.user.uid,
+        monitoredUid: childUid,
+      ),
+      builder: (context, safePlacesSnapshot) {
+        final safePlaces = safePlacesSnapshot.data ?? [];
+        _activeSafePlaces = safePlaces;
 
-        if (location != null) {
-          _updateLocationTrail(location);
-        }
+        return StreamBuilder<LocationModel?>(
+          stream: _firestoreService.streamChildLocation(childUid),
+          builder: (context, locationSnapshot) {
+            final location = locationSnapshot.data;
 
-        // Keep the map camera centered on the child as new GPS points
-        // arrive from Firestore, instead of only centering once on the
-        // very first location. Scheduled after the frame so the map
-        // controller is never touched in the middle of a build.
-        if (location != null && _mapController != null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _mapController?.animateCamera(
-              CameraUpdate.newLatLng(LatLng(location.latitude, location.longitude)),
-            );
-          });
-        }
+            if (location != null) {
+              _updateLocationTrail(location);
+              _processGeofenceForLocation(childUid, location);
+            }
 
-        final markers = <Marker>{};
-        final polylines = <Polyline>{};
+            // Keep the map camera centered on the child as new GPS points
+            // arrive from Firestore, instead of only centering once on the
+            // very first location. Scheduled after the frame so the map
+            // controller is never touched in the middle of a build.
+            if (location != null && _mapController != null) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _mapController?.animateCamera(
+                  CameraUpdate.newLatLng(LatLng(location.latitude, location.longitude)),
+                );
+              });
+            }
 
-        if (location != null) {
-          // Current child location marker (white style)
-          markers.add(
-            Marker(
-              markerId: const MarkerId('child_current'),
-              position: LatLng(location.latitude, location.longitude),
-              icon: _whiteMarkerIcon ?? BitmapDescriptor.defaultMarker,
-              anchor: const Offset(0.5, 0.5),
-              infoWindow: const InfoWindow(title: "Child's current location"),
-            ),
-          );
+            final markers = <Marker>{};
+            final polylines = <Polyline>{};
+            final circles = <Circle>{};
 
-          // If previous location exists, show previous marker, polyline, and directional arrow
-          if (_previousLocation != null) {
-            markers.add(
-              Marker(
-                markerId: const MarkerId('child_previous'),
-                position: LatLng(_previousLocation!.latitude, _previousLocation!.longitude),
-                icon: _darkBlueMarkerIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
-                anchor: const Offset(0.5, 0.5),
-                infoWindow: const InfoWindow(title: "Child's previous location"),
-              ),
-            );
+            // Add Geofence circles for each active SafePlace
+            for (final sp in safePlaces) {
+              circles.add(
+                Circle(
+                  circleId: CircleId('geofence_${sp.id}'),
+                  center: LatLng(sp.latitude, sp.longitude),
+                  radius: sp.radius,
+                  strokeColor: AppColors.primaryDark,
+                  strokeWidth: 2,
+                  fillColor: AppColors.primary.withValues(alpha: 0.18),
+                ),
+              );
 
-            // Directional indicator / arrow along the trail pointing from previous to current
-            final double midLat = (_previousLocation!.latitude + location.latitude) / 2.0;
-            final double midLng = (_previousLocation!.longitude + location.longitude) / 2.0;
-            final double bearing = _calculateBearing(
-              _previousLocation!.latitude,
-              _previousLocation!.longitude,
-              location.latitude,
-              location.longitude,
-            );
-
-            markers.add(
-              Marker(
-                markerId: const MarkerId('trail_arrow'),
-                position: LatLng(midLat, midLng),
-                icon: _arrowIcon ?? BitmapDescriptor.defaultMarker,
-                rotation: bearing,
-                anchor: const Offset(0.5, 0.5),
-                flat: true,
-              ),
-            );
-
-            polylines.add(
-              Polyline(
-                polylineId: const PolylineId('recent_movement_trail'),
-                points: [
-                  LatLng(_previousLocation!.latitude, _previousLocation!.longitude),
-                  LatLng(location.latitude, location.longitude),
-                ],
-                color: const Color(0xFF1E3A8A), // Dark blue trail
-                width: 3,
-              ),
-            );
-          }
-        }
-
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            return Column(
-              children: [
-                // ---------------- MAP ----------------
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Container(
-                      clipBehavior: Clip.antiAlias,
-                      decoration: AppDecorations.neumorphicCard(radius: 24),
-                      child: location == null
-                          ? const Center(child: Text('Waiting for child\'s location...'))
-                          : GoogleMap(
-                              style: AppDecorations.darkNavyMapStyle,
-                              initialCameraPosition: CameraPosition(
-                                target: LatLng(location.latitude, location.longitude),
-                                zoom: 15,
-                              ),
-                              onMapCreated: (controller) => _mapController = controller,
-                              markers: markers,
-                              polylines: polylines,
-                            ),
-                    ),
+              // Add a subtle center marker for the Safe Place
+              markers.add(
+                Marker(
+                  markerId: MarkerId('safe_place_${sp.id}'),
+                  position: LatLng(sp.latitude, sp.longitude),
+                  icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
+                  infoWindow: InfoWindow(
+                    title: sp.name,
+                    snippet: '${sp.radius.round()}m radius safe zone',
                   ),
                 ),
+              );
+            }
+
+            if (location != null) {
+              // Current child location marker (white style)
+              markers.add(
+                Marker(
+                  markerId: const MarkerId('child_current'),
+                  position: LatLng(location.latitude, location.longitude),
+                  icon: _whiteMarkerIcon ?? BitmapDescriptor.defaultMarker,
+                  anchor: const Offset(0.5, 0.5),
+                  infoWindow: const InfoWindow(title: "Child's current location"),
+                ),
+              );
+
+              // If previous location exists, show previous marker, polyline, and directional arrow
+              if (_previousLocation != null) {
+                markers.add(
+                  Marker(
+                    markerId: const MarkerId('child_previous'),
+                    position: LatLng(_previousLocation!.latitude, _previousLocation!.longitude),
+                    icon: _darkBlueMarkerIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+                    anchor: const Offset(0.5, 0.5),
+                    infoWindow: const InfoWindow(title: "Child's previous location"),
+                  ),
+                );
+
+                // Directional indicator / arrow along the trail pointing from previous to current
+                final double midLat = (_previousLocation!.latitude + location.latitude) / 2.0;
+                final double midLng = (_previousLocation!.longitude + location.longitude) / 2.0;
+                final double bearing = _calculateBearing(
+                  _previousLocation!.latitude,
+                  _previousLocation!.longitude,
+                  location.latitude,
+                  location.longitude,
+                );
+
+                markers.add(
+                  Marker(
+                    markerId: const MarkerId('trail_arrow'),
+                    position: LatLng(midLat, midLng),
+                    icon: _arrowIcon ?? BitmapDescriptor.defaultMarker,
+                    rotation: bearing,
+                    anchor: const Offset(0.5, 0.5),
+                    flat: true,
+                  ),
+                );
+
+                polylines.add(
+                  Polyline(
+                    polylineId: const PolylineId('recent_movement_trail'),
+                    points: [
+                      LatLng(_previousLocation!.latitude, _previousLocation!.longitude),
+                      LatLng(location.latitude, location.longitude),
+                    ],
+                    color: const Color(0xFF1E3A8A), // Dark blue trail
+                    width: 3,
+                  ),
+                );
+              }
+            }
+
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                return Column(
+                  children: [
+                    // ---------------- MAP ----------------
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Container(
+                          clipBehavior: Clip.antiAlias,
+                          decoration: AppDecorations.neumorphicCard(radius: 24),
+                          child: location == null
+                              ? const Center(child: Text('Waiting for child\'s location...'))
+                              : GoogleMap(
+                                  style: AppDecorations.darkNavyMapStyle,
+                                  initialCameraPosition: CameraPosition(
+                                    target: LatLng(location.latitude, location.longitude),
+                                    zoom: 15,
+                                  ),
+                                  onMapCreated: (controller) => _mapController = controller,
+                                  markers: markers,
+                                  polylines: polylines,
+                                  circles: circles,
+                                ),
+                        ),
+                      ),
+                    ),
 
                 const SizedBox(height: 12),
 
@@ -583,39 +649,67 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
                       return StreamBuilder<List<SosAlert>>(
                         stream: _firestoreService.streamAlertHistory(childUid),
                         builder: (context, alertSnapshot) {
-                          final alerts = alertSnapshot.data ?? [];
-                          final latestAlert = alerts.isNotEmpty ? alerts.first : null;
+                          return StreamBuilder<List<GeofenceEvent>>(
+                            stream: _firestoreService.streamGeofenceEvents(childUid),
+                            builder: (context, geofenceSnapshot) {
+                              final alerts = alertSnapshot.data ?? [];
+                              final geofenceEvents = geofenceSnapshot.data ?? [];
 
-                          String activityTitle = 'Normal monitoring active';
-                          String activitySubtitle = 'No emergency events detected';
-                          IconData activityIcon = Icons.check_circle_outline_rounded;
-                          Color activityColor = AppColors.success;
+                              final latestAlert = alerts.isNotEmpty ? alerts.first : null;
+                              final latestGeofence = geofenceEvents.isNotEmpty ? geofenceEvents.first : null;
 
-                          if (latestAlert != null) {
-                            final isRecentActive = latestAlert.status == 'active';
-                            activityTitle = isRecentActive ? 'SOS Alert Triggered' : 'Past SOS Resolved';
-                            activitySubtitle = '${_formatDate(latestAlert.timestamp)} at ${_formatTime(latestAlert.timestamp)} • Lat: ${latestAlert.latitude.toStringAsFixed(4)}, Lng: ${latestAlert.longitude.toStringAsFixed(4)}';
-                            activityIcon = isRecentActive ? Icons.warning_rounded : Icons.history_rounded;
-                            activityColor = isRecentActive ? AppColors.danger : AppColors.primary;
-                          } else if (location != null) {
-                            activityTitle = 'Live Location Updated';
-                            if (_previousLocation != null) {
-                              final double distM = Geolocator.distanceBetween(
-                                _previousLocation!.latitude,
-                                _previousLocation!.longitude,
-                                location.latitude,
-                                location.longitude,
-                              );
-                              final distText = distM >= 1000
-                                  ? '${(distM / 1000).toStringAsFixed(1)} km'
-                                  : '${distM.round()} m';
-                              activitySubtitle = 'Moved $distText • ${_formatTimeAgo(location.timestamp)}';
-                            } else {
-                              activitySubtitle = '${_formatDate(location.timestamp)} at ${_formatTime(location.timestamp)} • Lat: ${location.latitude.toStringAsFixed(4)}, Lng: ${location.longitude.toStringAsFixed(4)}';
-                            }
-                            activityIcon = Icons.my_location_rounded;
-                            activityColor = AppColors.primary;
-                          }
+                              String activityTitle = 'Normal monitoring active';
+                              String activitySubtitle = 'No emergency events detected';
+                              IconData activityIcon = Icons.check_circle_outline_rounded;
+                              Color activityColor = AppColors.success;
+
+                              // Determine whether latest SOS or latest Geofence event is newer
+                              final bool hasAlert = latestAlert != null;
+                              final bool hasGeofence = latestGeofence != null;
+
+                              if (hasAlert && (!hasGeofence || latestAlert.timestamp.isAfter(latestGeofence.timestamp))) {
+                                final isRecentActive = latestAlert.status == 'active';
+                                activityTitle = isRecentActive ? 'SOS Alert Triggered' : 'Past SOS Resolved';
+                                activitySubtitle = '${_formatDate(latestAlert.timestamp)} at ${_formatTime(latestAlert.timestamp)} • Lat: ${latestAlert.latitude.toStringAsFixed(4)}, Lng: ${latestAlert.longitude.toStringAsFixed(4)}';
+                                activityIcon = isRecentActive ? Icons.warning_rounded : Icons.history_rounded;
+                                activityColor = isRecentActive ? AppColors.danger : AppColors.primary;
+                              } else if (hasGeofence) {
+                                final isEnter = latestGeofence.eventType == 'ENTER';
+                                final isUnexpected = latestGeofence.eventType == 'UNEXPECTED_EXIT';
+
+                                if (isEnter) {
+                                  activityTitle = 'Entered ${latestGeofence.safePlaceName}';
+                                  activityIcon = Icons.login_rounded;
+                                  activityColor = AppColors.success;
+                                } else if (isUnexpected) {
+                                  activityTitle = 'Unexpected Exit: ${latestGeofence.safePlaceName}';
+                                  activityIcon = Icons.warning_amber_rounded;
+                                  activityColor = AppColors.danger;
+                                } else {
+                                  activityTitle = 'Left ${latestGeofence.safePlaceName}';
+                                  activityIcon = Icons.logout_rounded;
+                                  activityColor = AppColors.primaryDark;
+                                }
+                                activitySubtitle = '${_formatTime(latestGeofence.timestamp)} • ${_formatTimeAgo(latestGeofence.timestamp)}';
+                              } else if (location != null) {
+                                activityTitle = 'Live Location Updated';
+                                if (_previousLocation != null) {
+                                  final double distM = Geolocator.distanceBetween(
+                                    _previousLocation!.latitude,
+                                    _previousLocation!.longitude,
+                                    location.latitude,
+                                    location.longitude,
+                                  );
+                                  final distText = distM >= 1000
+                                      ? '${(distM / 1000).toStringAsFixed(1)} km'
+                                      : '${distM.round()} m';
+                                  activitySubtitle = 'Moved $distText • ${_formatTimeAgo(location.timestamp)}';
+                                } else {
+                                  activitySubtitle = '${_formatDate(location.timestamp)} at ${_formatTime(location.timestamp)} • Lat: ${location.latitude.toStringAsFixed(4)}, Lng: ${location.longitude.toStringAsFixed(4)}';
+                                }
+                                activityIcon = Icons.my_location_rounded;
+                                activityColor = AppColors.primary;
+                              }
 
                           return CustomCard(
                             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -657,6 +751,8 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
                               ],
                             ),
                           );
+                            },
+                          );
                         },
                       );
                     },
@@ -669,113 +765,211 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
         );
       },
     );
+      },
+    );
   }
 
-  // History tab: past SOS/safety events from real Firestore data.
+  // History tab: past SOS/safety events and Smart Geofence events from real Firestore data.
   Widget _buildHistoryScreen(String childUid) {
     return StreamBuilder<List<SosAlert>>(
       stream: _firestoreService.streamAlertHistory(childUid),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
+      builder: (context, alertSnapshot) {
+        return StreamBuilder<List<GeofenceEvent>>(
+          stream: _firestoreService.streamGeofenceEvents(childUid),
+          builder: (context, geofenceSnapshot) {
+            if (alertSnapshot.connectionState == ConnectionState.waiting &&
+                geofenceSnapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
 
-        final alerts = snapshot.data ?? [];
-        if (alerts.isEmpty) {
-          return Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: CustomCard(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.shield_rounded, size: 40, color: AppColors.success),
-                    const SizedBox(height: 16),
-                    Text('No Alert History', style: AppTextStyles.heading.copyWith(fontSize: 16)),
-                    const SizedBox(height: 8),
-                    Text(
-                      'There are no past SOS or emergency alerts for this child account.',
-                      textAlign: TextAlign.center,
-                      style: AppTextStyles.body,
+            final alerts = alertSnapshot.data ?? [];
+            final geofences = geofenceSnapshot.data ?? [];
+
+            // Merge events into a unified timeline
+            final List<dynamic> combinedHistory = [...alerts, ...geofences];
+            combinedHistory.sort((a, b) {
+              final DateTime timeA = a is SosAlert ? a.timestamp : (a as GeofenceEvent).timestamp;
+              final DateTime timeB = b is SosAlert ? b.timestamp : (b as GeofenceEvent).timestamp;
+              return timeB.compareTo(timeA); // Newest first
+            });
+
+            if (combinedHistory.isEmpty) {
+              return Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: CustomCard(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.shield_rounded, size: 40, color: AppColors.success),
+                        const SizedBox(height: 16),
+                        Text('No Safety Events', style: AppTextStyles.heading.copyWith(fontSize: 16)),
+                        const SizedBox(height: 8),
+                        Text(
+                          'No SOS alerts or geofence boundary events recorded yet.',
+                          textAlign: TextAlign.center,
+                          style: AppTextStyles.body,
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ),
-          );
-        }
+              );
+            }
 
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          itemCount: alerts.length,
-          itemBuilder: (context, index) {
-            final alert = alerts[index];
-            final isActive = alert.status == 'active';
+            return ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              itemCount: combinedHistory.length,
+              itemBuilder: (context, index) {
+                final item = combinedHistory[index];
 
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: CustomCard(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                child: Row(
-                  children: [
-                    Icon(
-                      isActive ? Icons.warning_rounded : Icons.check_circle_rounded,
-                      color: isActive ? AppColors.danger : AppColors.success,
-                      size: 28,
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
+                if (item is SosAlert) {
+                  final isActive = item.status == 'active';
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: CustomCard(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      child: Row(
                         children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  isActive ? 'SOS Emergency Alert' : 'Resolved Alert',
-                                  style: AppTextStyles.heading.copyWith(fontSize: 15),
+                          Icon(
+                            isActive ? Icons.warning_rounded : Icons.check_circle_rounded,
+                            color: isActive ? AppColors.danger : AppColors.success,
+                            size: 28,
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        isActive ? 'SOS Emergency Alert' : 'Resolved Alert',
+                                        style: AppTextStyles.heading.copyWith(fontSize: 15),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: (isActive ? AppColors.danger : AppColors.success).withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        isActive ? 'ACTIVE' : 'RESOLVED',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                          color: isActive ? AppColors.danger : AppColors.success,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Time: ${_formatDate(item.timestamp)} at ${_formatTime(item.timestamp)}',
+                                  style: AppTextStyles.subheading.copyWith(fontSize: 12),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: (isActive ? AppColors.danger : AppColors.success).withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(8),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'GPS: ${item.latitude.toStringAsFixed(5)}, ${item.longitude.toStringAsFixed(5)}',
+                                  style: AppTextStyles.body.copyWith(fontSize: 12, color: AppColors.textLight),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                child: Text(
-                                  isActive ? 'ACTIVE' : 'RESOLVED',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                    color: isActive ? AppColors.danger : AppColors.success,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Time: ${_formatDate(alert.timestamp)} at ${_formatTime(alert.timestamp)}',
-                            style: AppTextStyles.subheading.copyWith(fontSize: 12),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'GPS: ${alert.latitude.toStringAsFixed(5)}, ${alert.longitude.toStringAsFixed(5)}',
-                            style: AppTextStyles.body.copyWith(fontSize: 12, color: AppColors.textLight),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                              ],
+                            ),
                           ),
                         ],
                       ),
                     ),
-                  ],
-                ),
-              ),
+                  );
+                } else {
+                  final ge = item as GeofenceEvent;
+                  final isEnter = ge.eventType == 'ENTER';
+                  final isUnexpected = ge.eventType == 'UNEXPECTED_EXIT';
+
+                  final Color eventColor = isEnter
+                      ? AppColors.success
+                      : (isUnexpected ? AppColors.danger : AppColors.primaryDark);
+
+                  final IconData eventIcon = isEnter
+                      ? Icons.login_rounded
+                      : (isUnexpected ? Icons.warning_amber_rounded : Icons.logout_rounded);
+
+                  final String eventBadge = isEnter
+                      ? 'ENTERED'
+                      : (isUnexpected ? 'UNEXPECTED EXIT' : 'LEFT');
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: CustomCard(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      child: Row(
+                        children: [
+                          Icon(eventIcon, color: eventColor, size: 28),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '${isEnter ? "Entered" : (isUnexpected ? "Unexpected Exit from" : "Left")} ${ge.safePlaceName}',
+                                        style: AppTextStyles.heading.copyWith(fontSize: 15),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: eventColor.withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        eventBadge,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                          color: eventColor,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Time: ${_formatDate(ge.timestamp)} at ${_formatTime(ge.timestamp)} • ${_formatTimeAgo(ge.timestamp)}',
+                                  style: AppTextStyles.subheading.copyWith(fontSize: 12),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Distance: ${ge.distance.round()} m from center • GPS Accuracy: ±${ge.accuracy.round()}m',
+                                  style: AppTextStyles.body.copyWith(fontSize: 12, color: AppColors.textLight),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+              },
             );
           },
         );
@@ -783,29 +977,85 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
     );
   }
 
-  // Profile tab placeholder
+  // Profile tab
   Widget _buildProfileScreen() {
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: CustomCard(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.person_rounded, size: 40, color: AppColors.primaryDark),
-              const SizedBox(height: 16),
-              Text(widget.user.name, style: AppTextStyles.heading.copyWith(fontSize: 18)),
-              const SizedBox(height: 4),
-              Text(widget.user.email, style: AppTextStyles.subheading.copyWith(fontSize: 13)),
-              const SizedBox(height: 12),
-              Text(
-                'Role: Parent\nLink Code: ${widget.user.linkCode ?? "None"}',
-                textAlign: TextAlign.center,
-                style: AppTextStyles.body,
-              ),
-            ],
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      child: Column(
+        children: [
+          CustomCard(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.person_rounded, size: 44, color: AppColors.primaryDark),
+                const SizedBox(height: 12),
+                Text(widget.user.name, style: AppTextStyles.heading.copyWith(fontSize: 18)),
+                const SizedBox(height: 4),
+                Text(widget.user.email, style: AppTextStyles.subheading.copyWith(fontSize: 13)),
+                const SizedBox(height: 12),
+                Text(
+                  'Role: Parent\nLink Code: ${widget.user.linkCode ?? "None"}',
+                  textAlign: TextAlign.center,
+                  style: AppTextStyles.body,
+                ),
+              ],
+            ),
           ),
-        ),
+          const SizedBox(height: 16),
+          // Profile -> Safe Places Navigation Tile
+          CustomCard(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => SafePlacesScreen(user: widget.user),
+                ),
+              );
+            },
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(
+                    Icons.shield_rounded,
+                    color: AppColors.primaryDark,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Safe Places',
+                        style: AppTextStyles.heading.copyWith(fontSize: 15),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Manage geofenced zones (Home, School, Office)',
+                        style: AppTextStyles.subheading.copyWith(fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  size: 16,
+                  color: AppColors.textLight,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
