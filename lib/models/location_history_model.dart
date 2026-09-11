@@ -1,26 +1,25 @@
 // ============================================================
-// sos_model.dart
+// location_history_model.dart
 // ------------------------------------------------------------
-// Represents a single emergency alert stored in the Firestore
-// "sos_alerts" collection. Created when the child taps the
-// SOS button in Child Mode.
+// Represents a single historical GPS data point stored in the
+// Firestore "location_history" collection for future ML training.
 // ============================================================
 
-class SosAlert {
+class LocationHistoryModel {
   final String childUid;
   final double latitude;
   final double longitude;
   final DateTime timestamp;
-  final String status; // "active" or "resolved"
-  final String source; // "manual" or "automatic_sos"
+  final double accuracy;
+  final int sequenceNumber;
 
-  SosAlert({
+  LocationHistoryModel({
     required this.childUid,
     required this.latitude,
     required this.longitude,
     required this.timestamp,
-    this.status = 'active',
-    this.source = 'manual',
+    required this.accuracy,
+    required this.sequenceNumber,
   });
 
   Map<String, dynamic> toMap() {
@@ -29,19 +28,19 @@ class SosAlert {
       'latitude': latitude,
       'longitude': longitude,
       'timestamp': timestamp.toIso8601String(),
-      'status': status,
-      'source': source,
+      'accuracy': accuracy,
+      'sequenceNumber': sequenceNumber,
     };
   }
 
-  factory SosAlert.fromMap(Map<String, dynamic> map) {
-    return SosAlert(
+  factory LocationHistoryModel.fromMap(Map<String, dynamic> map) {
+    return LocationHistoryModel(
       childUid: map['childUid'] ?? '',
       latitude: (map['latitude'] ?? 0).toDouble(),
       longitude: (map['longitude'] ?? 0).toDouble(),
       timestamp: DateTime.tryParse(map['timestamp'] ?? '') ?? DateTime.now(),
-      status: map['status'] ?? 'active',
-      source: map['source'] ?? 'manual',
+      accuracy: (map['accuracy'] ?? 10.0).toDouble(),
+      sequenceNumber: (map['sequenceNumber'] ?? 0) as int,
     );
   }
 }

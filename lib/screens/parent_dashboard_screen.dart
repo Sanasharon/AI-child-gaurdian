@@ -680,7 +680,12 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
 
                               if (newestType == 'alert' && latestAlert != null) {
                                 final isRecentActive = latestAlert.status == 'active';
-                                activityTitle = isRecentActive ? 'SOS Alert Triggered' : 'Past SOS Resolved';
+                                final isAuto = latestAlert.source == 'automatic_sos';
+                                if (isAuto) {
+                                  activityTitle = isRecentActive ? 'Automatic SOS Triggered' : 'Automatic SOS Resolved';
+                                } else {
+                                  activityTitle = isRecentActive ? 'SOS Alert Triggered' : 'Past SOS Resolved';
+                                }
                                 activitySubtitle = '${_formatDate(latestAlert.timestamp)} at ${_formatTime(latestAlert.timestamp)} • Lat: ${latestAlert.latitude.toStringAsFixed(4)}, Lng: ${latestAlert.longitude.toStringAsFixed(4)}';
                                 activityIcon = isRecentActive ? Icons.warning_rounded : Icons.history_rounded;
                                 activityColor = isRecentActive ? AppColors.danger : AppColors.primary;
@@ -836,6 +841,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
 
                 if (item is SosAlert) {
                   final isActive = item.status == 'active';
+                  final isAuto = item.source == 'automatic_sos';
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: CustomCard(
@@ -857,12 +863,32 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
                                   children: [
                                     Expanded(
                                       child: Text(
-                                        isActive ? 'SOS Emergency Alert' : 'Resolved Alert',
+                                        isAuto
+                                            ? (isActive ? 'Automatic SOS Alert' : 'Resolved Auto SOS')
+                                            : (isActive ? 'SOS Emergency Alert' : 'Resolved Alert'),
                                         style: AppTextStyles.heading.copyWith(fontSize: 15),
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
+                                    if (isAuto) ...[
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        margin: const EdgeInsets.only(right: 6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.deepOrange.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: const Text(
+                                          'AUTO',
+                                          style: TextStyle(
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.deepOrange,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                                       decoration: BoxDecoration(

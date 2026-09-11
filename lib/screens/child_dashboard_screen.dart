@@ -15,6 +15,7 @@ import '../models/sos_model.dart';
 import '../services/location_service.dart';
 import '../services/firestore_service.dart';
 import '../services/auth_service.dart';
+import '../services/emergency_monitoring_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_card.dart';
 import '../widgets/bottom_nav_bar.dart';
@@ -33,6 +34,7 @@ class _ChildDashboardScreenState extends State<ChildDashboardScreen> {
   final _locationService = LocationService();
   final _firestoreService = FirestoreService();
   final _authService = AuthService();
+  final _emergencyMonitoringService = EmergencyMonitoringService();
 
   int _navIndex = 0;
   bool _isSendingSos = false;
@@ -45,13 +47,20 @@ class _ChildDashboardScreenState extends State<ChildDashboardScreen> {
   void initState() {
     super.initState();
     _initLocationTracking();
+    _initEmergencyMonitoring();
     _listenToSafetyRequests();
+  }
+
+  Future<void> _initEmergencyMonitoring() async {
+    await _emergencyMonitoringService.init();
+    await _emergencyMonitoringService.startMonitoring(widget.user.uid);
   }
 
   @override
   void dispose() {
     _safetySubscription?.cancel();
     _locationService.stopTracking();
+    _emergencyMonitoringService.stopMonitoring();
     super.dispose();
   }
 
@@ -93,16 +102,48 @@ class _ChildDashboardScreenState extends State<ChildDashboardScreen> {
     });
   }
 
-  // Requests permission then starts sending GPS updates every 10s.
+  LocationPermissionState _permissionState = LocationPermissionState.granted;
+
+  // Requests permission with background capability, then starts sending GPS updates.
   Future<void> _initLocationTracking() async {
-    final granted = await _locationService.requestPermission();
-    if (!granted) {
-      setState(() => _statusMessage = 'Location permission is required for safety tracking.');
-      return;
-    }
-    if (!_isLocationPaused) {
-      _locationService.startTracking(widget.user.uid);
-      setState(() => _statusMessage = 'Live location tracking is ON.');
+    final state = await _locationService.requestDetailedPermissions();
+    if (!mounted) return;
+
+    setState(() => _permissionState = state);
+
+    switch (state) {
+      case LocationPermissionState.serviceDisabled:
+        setState(() {
+          _statusMessage = 'Device GPS/Location services are OFF. Tap to enable.';
+        });
+        break;
+      case LocationPermissionState.denied:
+        setState(() {
+          _statusMessage = 'Location permission is denied. Safety tracking inactive.';
+        });
+        break;
+      case LocationPermissionState.deniedForever:
+        setState(() {
+          _statusMessage = 'Location permission permanently denied. Tap to open Settings.';
+        });
+        break;
+      case LocationPermissionState.backgroundDenied:
+        if (!_isLocationPaused) {
+          _locationService.startTracking(widget.user.uid);
+          setState(() {
+            _statusMessage = 'Tracking active (Foreground only. Set "Allow all the time" for background protection).';
+          });
+        }
+        break;
+      case LocationPermissionState.backgroundGranted:
+      case LocationPermissionState.granted:
+        if (!_isLocationPaused) {
+          _locationService.startTracking(widget.user.uid);
+          setState(() {
+            _statusMessage = 'Live location tracking is ON (Background active).';
+          });
+        }
+        break;
     }
   }
 
@@ -224,7 +265,20 @@ class _ChildDashboardScreenState extends State<ChildDashboardScreen> {
 
                                       // ---- Status card ----
                                       GestureDetector(
-                                        onTap: () => setState(() => _navIndex = 1),
+                                        onTap: () async {
+                                          if (_permissionState == LocationPermissionState.serviceDisabled) {
+                                            await _locationService.openLocationSettings();
+                                            _initLocationTracking();
+                                          } else if (_permissionState == LocationPermissionState.deniedForever) {
+                                            await _locationService.openAppSettings();
+                                            _initLocationTracking();
+                                          } else if (_permissionState == LocationPermissionState.denied ||
+                                              _permissionState == LocationPermissionState.backgroundDenied) {
+                                            _initLocationTracking();
+                                          } else {
+                                            setState(() => _navIndex = 1);
+                                          }
+                                        },
                                         child: CustomCard(
                                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                                           child: Row(
@@ -443,6 +497,8 @@ class _ChildDashboardScreenState extends State<ChildDashboardScreen> {
           const SizedBox(width: 12),
           GestureDetector(
             onTap: () async {
+              _locationService.stopTracking();
+              _emergencyMonitoringService.stopMonitoring();
               await _authService.logout();
               if (mounted) {
                 Navigator.pushReplacement(

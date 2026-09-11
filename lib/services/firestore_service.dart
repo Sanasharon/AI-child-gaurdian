@@ -17,6 +17,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
 import '../models/location_model.dart';
+import '../models/location_history_model.dart';
 import '../models/sos_model.dart';
 import '../models/safe_place_model.dart';
 import '../models/geofence_event_model.dart';
@@ -89,6 +90,14 @@ class FirestoreService {
         .collection('locations')
         .doc(location.childUid)
         .set(location.toMap());
+  }
+
+  // ---------------- LOCATION HISTORY (ML DATASET) ----------------
+
+  // Records a GPS point to the "location_history" collection for future ML training.
+  // Each record is appended as a new document with an auto-generated ID.
+  Future<void> recordLocationHistory(LocationHistoryModel historyRecord) async {
+    await _db.collection('location_history').add(historyRecord.toMap());
   }
 
   // Real-time stream the Parent Dashboard listens to, so the
